@@ -17,6 +17,9 @@ coverage.xml
 htmlcov/
 
 # Environment files
+.env
+.env.*
+!.env.example
 
 # Runtime data and logs
 data/chroma/
