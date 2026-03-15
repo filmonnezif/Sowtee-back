@@ -12,7 +12,9 @@ wants to say based on:
 
 import json
 import time
+import re
 import structlog
+import unicodedata
 from uuid import uuid4
 
 from ..config import get_settings
@@ -155,6 +157,10 @@ class PredictiveSuggestionService:
             )
 
         result.processing_time_ms = (time.time() - start_time) * 1000
+
+        if language.startswith("ar"):
+            result = self._sanitize_arabic_result(result)
+
         return result
 
     async def _generate_ai_predictions(
@@ -254,7 +260,103 @@ ONLY respond with valid JSON, no markdown or explanation."""
 
         except Exception as e:
             logger.error("AI prediction failed", error=str(e))
-            return self._generate_fallback_predictions(partial_text, conversation_history)
+            return self._generate_fallback_predictions(partial_text, conversation_history, language=language)
+
+    @staticmethod
+    def _is_arabic_char(char: str) -> bool:
+        codepoint = ord(char)
+        return (
+            0x0600 <= codepoint <= 0x06FF  # Arabic
+            or 0x0750 <= codepoint <= 0x077F  # Arabic Supplement
+            or 0x08A0 <= codepoint <= 0x08FF  # Arabic Extended-A
+            or 0xFB50 <= codepoint <= 0xFDFF  # Arabic Presentation Forms-A
+            or 0xFE70 <= codepoint <= 0xFEFF  # Arabic Presentation Forms-B
+            or 0x1EE00 <= codepoint <= 0x1EEFF  # Arabic Mathematical Alphabetic Symbols
+        )
+
+    @staticmethod
+    def _is_latin_char(char: str) -> bool:
+        return ("A" <= char <= "Z") or ("a" <= char <= "z")
+
+    def _sanitize_arabic_text(self, text: str) -> str:
+        if not text:
+            return ""
+
+        allowed_punctuation = set(".,!?؟،؛:-()[]{}\"'…")
+        filtered_chars: list[str] = []
+
+        for char in text:
+            if char.isspace():
+                filtered_chars.append(char)
+                continue
+
+            if self._is_arabic_char(char):
+                filtered_chars.append(char)
+                continue
+
+            if self._is_latin_char(char):
+                filtered_chars.append(char)
+                continue
+
+            if char.isdigit() or char in allowed_punctuation:
+                filtered_chars.append(char)
+                continue
+
+            if unicodedata.category(char).startswith("M"):
+                filtered_chars.append(char)
+
+        sanitized = "".join(filtered_chars)
+        sanitized = re.sub(r"\s+", " ", sanitized).strip()
+        return sanitized
+
+    def _is_valid_arabic_output(self, text: str) -> bool:
+        if not text:
+            return False
+
+        has_supported_letters = any(
+            self._is_arabic_char(char) or self._is_latin_char(char)
+            for char in text
+        )
+        if not has_supported_letters:
+            return False
+
+        for char in text:
+            if char.isalpha() and not (
+                self._is_arabic_char(char) or self._is_latin_char(char)
+            ):
+                return False
+
+        return True
+
+    def _sanitize_arabic_result(self, result: PredictionResult) -> PredictionResult:
+        sanitized_suggestions: list[PredictedText] = []
+        for suggestion in result.suggestions:
+            cleaned_text = self._sanitize_arabic_text(suggestion.text)
+            if not self._is_valid_arabic_output(cleaned_text):
+                continue
+
+            sanitized_suggestions.append(
+                PredictedText(
+                    text=cleaned_text,
+                    confidence=suggestion.confidence,
+                    is_completion=suggestion.is_completion,
+                )
+            )
+
+        cleaned_ghost = self._sanitize_arabic_text(result.ghost_text or "")
+        ghost_text = cleaned_ghost if self._is_valid_arabic_output(cleaned_ghost) else None
+
+        if not sanitized_suggestions:
+            fallback = self._generate_fallback_predictions("", [], language="ar")
+            sanitized_suggestions = fallback.suggestions
+            if ghost_text is None:
+                ghost_text = fallback.ghost_text
+
+        return PredictionResult(
+            suggestions=sanitized_suggestions,
+            ghost_text=ghost_text,
+            processing_time_ms=result.processing_time_ms,
+        )
 
     def _parse_response(self, response_text: str, partial_text: str) -> PredictionResult:
         """Parse LLM response into PredictionResult."""
@@ -307,6 +409,37 @@ ONLY respond with valid JSON, no markdown or explanation."""
                     "have you", "what", "where", "when", "who", "why", "how",
                 ))
             )
+
+        if language.startswith("ar"):
+            if not partial_text.strip():
+                if last_was_question:
+                    suggestions = [
+                        PredictedText("نعم", 0.95),
+                        PredictedText("لا", 0.95),
+                        PredictedText("لا أعرف", 0.85),
+                        PredictedText("ربما", 0.8),
+                        PredictedText("نعم من فضلك", 0.75),
+                    ]
+                    ghost_text = "نعم"
+                else:
+                    suggestions = [
+                        PredictedText("أريد", 0.8),
+                        PredictedText("هل يمكنك مساعدتي", 0.75),
+                        PredictedText("شكراً", 0.7),
+                        PredictedText("أحتاج", 0.7),
+                        PredictedText("من فضلك", 0.65),
+                    ]
+                    ghost_text = "أريد"
+            else:
+                cleaned_partial = self._sanitize_arabic_text(partial_text)
+                suggestions = [
+                    PredictedText(f"{cleaned_partial} من فضلك", 0.65, is_completion=True),
+                    PredictedText("شكراً", 0.6),
+                    PredictedText("نعم", 0.55),
+                ]
+                ghost_text = f"{cleaned_partial}..." if cleaned_partial else "أريد"
+
+            return PredictionResult(suggestions=suggestions, ghost_text=ghost_text)
 
         if not partial_text.strip():
             # Preemptive suggestions
