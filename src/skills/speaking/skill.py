@@ -31,6 +31,7 @@ class SpeakingSkill(BaseSkill):
         self._letter_system = LetterCardSystem()
         self._expander: AbbreviationExpander | None = None
         self._model_manager = get_model_manager()
+        self._language: str = "en"
     
     def get_info(self) -> SkillInfo:
         """Return skill information."""
@@ -61,11 +62,13 @@ class SpeakingSkill(BaseSkill):
         - reset: Reset the letter system
         """
         action = kwargs.get("action", "get_cards")
+        language = kwargs.get("language", "en")
+        self._language = language
         
         if action == "get_cards":
-            return self._handle_get_cards()
+            return self._handle_get_cards(language)
         elif action == "select_card":
-            return self._handle_select_card(kwargs.get("card_index", 0))
+            return self._handle_select_card(kwargs.get("card_index", 0), language)
         elif action == "select_letter":
             return self._handle_select_letter(kwargs.get("letter_index", 0))
         elif action == "expand":
@@ -73,30 +76,30 @@ class SpeakingSkill(BaseSkill):
         elif action == "get_suggestions":
             return await self._handle_get_suggestions(context, kwargs.get("count", 5))
         elif action == "reset":
-            return self._handle_reset()
+            return self._handle_reset(language)
         elif action == "backspace":
             return self._handle_backspace()
         elif action == "add_space":
             return self._handle_add_space()
         elif action == "go_back":
-            return self._handle_go_back()
+            return self._handle_go_back(language)
         elif action == "get_state":
             return self._handle_get_state()
         else:
             return {"error": f"Unknown action: {action}"}
     
-    def _handle_get_cards(self) -> dict[str, Any]:
-        """Get the 5 letter cards."""
+    def _handle_get_cards(self, language: str = "en") -> dict[str, Any]:
+        """Get the letter cards."""
         return {
             "action": "get_cards",
-            "cards": self._letter_system.get_cards(),
+            "cards": self._letter_system.get_cards(language),
             "state": self._letter_system.state.to_dict(),
         }
     
-    def _handle_select_card(self, card_index: int) -> dict[str, Any]:
+    def _handle_select_card(self, card_index: int, language: str = "en") -> dict[str, Any]:
         """Select a card and spread letters."""
         try:
-            state = self._letter_system.select_card(card_index)
+            state = self._letter_system.select_card(card_index, language)
             return {
                 "action": "select_card",
                 "card_index": card_index,
@@ -236,9 +239,9 @@ Only respond with valid JSON."""
             logger.warning("Failed to parse suggestions response")
             return []
     
-    def _handle_reset(self) -> dict[str, Any]:
+    def _handle_reset(self, language: str = "en") -> dict[str, Any]:
         """Reset the letter system."""
-        state = self._letter_system.reset()
+        state = self._letter_system.reset(language)
         return {
             "action": "reset",
             "state": state.to_dict(),
@@ -262,12 +265,12 @@ Only respond with valid JSON."""
             "state": state.to_dict(),
         }
     
-    def _handle_go_back(self) -> dict[str, Any]:
+    def _handle_go_back(self, language: str = "en") -> dict[str, Any]:
         """Go back from letters to cards."""
         state = self._letter_system.go_back()
         return {
             "action": "go_back",
-            "cards": self._letter_system.get_cards() if state.level.value == "cards" else None,
+            "cards": self._letter_system.get_cards(language) if state.level.value == "cards" else None,
             "state": state.to_dict(),
         }
     
@@ -276,7 +279,7 @@ Only respond with valid JSON."""
         state = self._letter_system.state
         return {
             "action": "get_state",
-            "cards": self._letter_system.get_cards() if state.level.value == "cards" else None,
+            "cards": self._letter_system.get_cards(self._language) if state.level.value == "cards" else None,
             "spread_letters": self._letter_system.get_spread_letters() if state.level.value == "letters" else None,
             "state": state.to_dict(),
         }

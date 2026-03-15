@@ -1,13 +1,21 @@
 """
 SOWTEE Letter Card System
-5-card letter selection for efficient text input.
+Multi-language letter selection for efficient text input.
 
-Card Layout:
+English Card Layout:
 - Card 1: A B C D E (5 letters)
 - Card 2: F G H I J (5 letters)  
 - Card 3: K L M N O (5 letters)
 - Card 4: P Q R S T (5 letters)
 - Card 5: U V W X Y Z (6 letters - X and Z grouped when spread)
+
+Arabic Card Layout (28 letters across 6 cards):
+- Card 1: أ ب ت ث ج
+- Card 2: ح خ د ذ ر
+- Card 3: ز س ش ص ض
+- Card 4: ط ظ ع غ ف
+- Card 5: ق ك ل م ن
+- Card 6: ه و ي
 """
 
 from dataclasses import dataclass, field
@@ -28,6 +36,7 @@ class CardState:
     selected_card_index: int | None = None
     current_letters: list[str] = field(default_factory=list)
     typed_text: str = ""
+    language: str = "en"
     
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -35,39 +44,53 @@ class CardState:
             "selected_card_index": self.selected_card_index,
             "current_letters": self.current_letters,
             "typed_text": self.typed_text,
+            "language": self.language,
         }
 
 
 class LetterCardSystem:
     """
-    5-card letter selection system for AAC input.
+    Multi-language letter card selection system for AAC input.
     
     Flow:
-    1. Display 5 cards with letter groups
-    2. User selects a card → letters spread to 5 sections
-    3. For 6-letter card (UVWXYZ), X and Z are grouped
-    4. If X+Z section selected, create 2-letter final selection
-    5. Letter selected → add to text field, reset to cards
+    1. Display cards with letter groups (5 for English, 6 for Arabic)
+    2. User selects a card → letters spread to individual sections
+    3. For grouped letters (e.g. English XZ), show sub-options
+    4. Letter selected → add to text field, reset to cards
     """
     
-    # Card definitions: 5 cards with letter groups
-    CARDS = [
+    # ── English card definitions ──
+    CARDS_EN = [
         ["A", "B", "C", "D", "E"],      # Card 0
         ["F", "G", "H", "I", "J"],      # Card 1
         ["K", "L", "M", "N", "O"],      # Card 2
         ["P", "Q", "R", "S", "T"],      # Card 3
         ["U", "V", "W", "X", "Y", "Z"], # Card 4 (6 letters)
     ]
-    
-    # Display labels for cards (combined letters)
-    CARD_LABELS = [
-        "ABCDE",
-        "FGHIJ",
-        "KLMNO",
-        "PQRST",
-        "UVWXYZ",
+    CARD_LABELS_EN = ["ABCDE", "FGHIJ", "KLMNO", "PQRST", "UVWXYZ"]
+
+    # ── Arabic card definitions (28 letters across 6 cards) ──
+    CARDS_AR = [
+        ["أ", "ب", "ت", "ث", "ج"],     # Card 0
+        ["ح", "خ", "د", "ذ", "ر"],     # Card 1
+        ["ز", "س", "ش", "ص", "ض"],     # Card 2
+        ["ط", "ظ", "ع", "غ", "ف"],     # Card 3
+        ["ق", "ك", "ل", "م", "ن"],     # Card 4
+        ["ه", "و", "ي"],                # Card 5 (3 letters)
     ]
-    
+    CARD_LABELS_AR = [
+        "أ ب ت ث ج",
+        "ح خ د ذ ر",
+        "ز س ش ص ض",
+        "ط ظ ع غ ف",
+        "ق ك ل م ن",
+        "ه و ي",
+    ]
+
+    # Backward-compat aliases
+    CARDS = CARDS_EN
+    CARD_LABELS = CARD_LABELS_EN
+
     def __init__(self) -> None:
         self._state = CardState()
     
@@ -75,47 +98,57 @@ class LetterCardSystem:
     def state(self) -> CardState:
         """Get current state."""
         return self._state
-    
-    def reset(self) -> CardState:
-        """Reset to initial state (showing 5 cards)."""
-        self._state = CardState()
+
+    def _cards_for_lang(self, language: str | None = None) -> tuple[list[list[str]], list[str]]:
+        """Return (cards, labels) for the given language."""
+        lang = language or self._state.language or "en"
+        if lang.startswith("ar"):
+            return self.CARDS_AR, self.CARD_LABELS_AR
+        return self.CARDS_EN, self.CARD_LABELS_EN
+
+    def reset(self, language: str | None = None) -> CardState:
+        """Reset to initial state (showing cards)."""
+        lang = language or self._state.language or "en"
+        self._state = CardState(language=lang)
         return self._state
     
-    def get_cards(self) -> list[dict[str, Any]]:
+    def get_cards(self, language: str | None = None) -> list[dict[str, Any]]:
         """
-        Get the 5 main cards for display.
+        Get the main cards for display.
         
         Returns:
             List of card objects with index, letters, and label
         """
+        cards, labels = self._cards_for_lang(language)
         return [
             {
                 "index": i,
-                "letters": self.CARDS[i],
-                "label": self.CARD_LABELS[i],
-                "letter_count": len(self.CARDS[i]),
+                "letters": cards[i],
+                "label": labels[i],
+                "letter_count": len(cards[i]),
             }
-            for i in range(5)
+            for i in range(len(cards))
         ]
     
-    def select_card(self, card_index: int) -> CardState:
+    def select_card(self, card_index: int, language: str | None = None) -> CardState:
         """
         Select a card and spread its letters.
         
         Args:
-            card_index: Index of the card (0-4)
+            card_index: Index of the card
+            language: Language code
             
         Returns:
             Updated state with letters spread
         """
-        if card_index < 0 or card_index >= len(self.CARDS):
+        cards, _ = self._cards_for_lang(language)
+        if card_index < 0 or card_index >= len(cards):
             raise ValueError(f"Invalid card index: {card_index}")
         
-        letters = self.CARDS[card_index]
+        letters = cards[card_index]
         
-        # For 6-letter card, group X and Z together
-        if len(letters) == 6:
-            # Create 5 sections: U, V, W, X+Z, Y
+        # For English 6-letter card, group X and Z together
+        if len(letters) == 6 and (language or self._state.language or "en").startswith("en"):
             spread_letters = ["U", "V", "W", "XZ", "Y"]
         else:
             spread_letters = letters.copy()
@@ -171,8 +204,10 @@ class LetterCardSystem:
             self._state.current_letters = list(selected)  # ["X", "Z"]
             return self._state, list(selected)
         
-        # Single letter selected - add to typed text and reset
-        self._state.typed_text += selected.lower()
+        # Single letter selected - add to typed text
+        # Arabic has no case distinction, so don't lowercase
+        lang = self._state.language or "en"
+        self._state.typed_text += selected if lang.startswith("ar") else selected.lower()
         result_letter = selected
         
         # Reset to card view

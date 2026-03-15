@@ -91,6 +91,7 @@ class PredictiveSuggestionService:
         scene_description: str | None = None,
         conversation_history: list[dict] | None = None,
         num_suggestions: int = 5,
+        language: str = "en",
     ) -> PredictionResult:
         """
         Get predictive text suggestions.
@@ -143,12 +144,14 @@ class PredictiveSuggestionService:
                 user_phrases=user_phrases,
                 num_suggestions=num_suggestions,
                 profile_context=profile_context,
+                language=language,
             )
         except Exception as e:
             logger.error("All prediction models failed, using rule-based fallback", error=str(e))
             result = self._generate_fallback_predictions(
                 partial_text=partial_text,
                 conversation_history=conversation_history or [],
+                language=language,
             )
 
         result.processing_time_ms = (time.time() - start_time) * 1000
@@ -162,6 +165,7 @@ class PredictiveSuggestionService:
         user_phrases: list[str],
         num_suggestions: int,
         profile_context: str = "",
+        language: str = "en",
     ) -> PredictionResult:
         """Generate predictions using LLM."""
 
@@ -198,8 +202,17 @@ IMPORTANT: Each suggestion must logically continue from the typed text."""
         # Build profile section for prompt
         profile_section = f"\n{profile_context}\n" if profile_context else ""
 
+        # Language instruction
+        if language.startswith("ar"):
+            lang_instruction = """IMPORTANT: The user is communicating in Arabic (العربية).
+All suggestions, ghost_text, and completions MUST be in Arabic.
+Write naturally in Arabic script. Do NOT transliterate or use English."""
+        else:
+            lang_instruction = "The user is communicating in English."
+
         prompt = f"""You are an AAC (Augmentative and Alternative Communication) predictive text assistant.
 You help a person with speech/motor impairment communicate by predicting what they want to say.
+{lang_instruction}
 {profile_section}
 VISUAL SCENE: {scene_description}
 {conv_str}
@@ -279,6 +292,7 @@ ONLY respond with valid JSON, no markdown or explanation."""
         self,
         partial_text: str,
         conversation_history: list[dict],
+        language: str = "en",
     ) -> PredictionResult:
         """Rule-based fallback when AI is unavailable."""
 

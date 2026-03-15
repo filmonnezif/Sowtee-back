@@ -167,6 +167,7 @@ class TextPredictionRequest(BaseModel):
     scene_description: str | None = None
     conversation_history: list[dict] | None = None
     num_suggestions: int = 5
+    language: str = "en"
 
 
 class PredictedTextItem(BaseModel):
@@ -209,6 +210,7 @@ async def predict_text(request: TextPredictionRequest) -> TextPredictionResponse
         scene_description=request.scene_description,
         conversation_history=request.conversation_history,
         num_suggestions=request.num_suggestions,
+        language=request.language,
     )
 
     return TextPredictionResponse(
@@ -506,6 +508,7 @@ class SkillActionRequest(BaseModel):
     user_id: str
     session_id: str | None = None
     action: str
+    language: str = "en"
     scene_description: str | None = None
     scene_image: str | None = None
     conversation_history: list[dict] | None = None
@@ -602,6 +605,7 @@ async def speaking_skill_action(request: SkillActionRequest) -> SkillActionRespo
         card_index=request.card_index,
         letter_index=request.letter_index,
         count=request.count,
+        language=request.language,
     )
     
     return SkillActionResponse(**result)
