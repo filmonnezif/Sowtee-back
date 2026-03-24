@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     groq_api_key: str = Field(default="", description="Groq API Key")
     groq_model: str = "llama-3.3-70b-versatile"
     groq_fallback_model: str = "llama-3.1-8b-instant"
+    groq_whisper_model: str = "whisper-large-v3"
     
     # Lingo.dev Translation API (for EN→AR/UR translation)
     lingodotdev_api_key: str = Field(default="", description="Lingo.dev API Key for translation")

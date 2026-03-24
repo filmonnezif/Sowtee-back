@@ -254,6 +254,55 @@ class ModelManager:
     def _get_model_for_task(self, task_type: str) -> str:
         """Get the appropriate model for a task type."""
         return self.DEFAULT_MODELS.get(task_type, self.DEFAULT_MODELS["suggestions"])
+
+    async def transcribe_audio(
+        self,
+        audio_bytes: bytes,
+        *,
+        filename: str = "audio.webm",
+        content_type: str = "audio/webm",
+        language: str | None = None,
+        prompt: str | None = None,
+    ) -> dict[str, Any]:
+        """Transcribe audio bytes using Groq Whisper models."""
+        from ..config import get_settings
+
+        settings = get_settings()
+        model_id = settings.groq_whisper_model
+        client = self._get_client()
+        transcription_prompt = prompt or (
+            "Transcribe only clear spoken human language. "
+            "If the audio is mostly silence, claps, taps, background noise, breaths, or non-speech sounds, return an empty transcription."
+        )
+
+        if model_id not in self._usage:
+            self._usage[model_id] = ModelUsage()
+        self._usage[model_id].requests += 1
+
+        try:
+            response = await client.audio.transcriptions.create(
+                model=model_id,
+                file=(filename, audio_bytes, content_type),
+                language=language,
+                prompt=transcription_prompt,
+                response_format="verbose_json",
+                temperature=0,
+            )
+
+            response_dict = response.model_dump() if hasattr(response, "model_dump") else dict(response)
+            text = (response_dict.get("text") or "").strip()
+
+            return {
+                "text": text,
+                "language": response_dict.get("language") or language,
+                "duration": response_dict.get("duration"),
+                "segments": response_dict.get("segments"),
+                "model": model_id,
+            }
+        except Exception as e:
+            self._usage[model_id].errors += 1
+            self._record_error(model_id, str(e), "transcription")
+            raise
     
     def _is_in_cooldown(self, model_id: str) -> bool:
         """Check if a model is in cooldown period."""

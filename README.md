@@ -1,6 +1,6 @@
 # SOWTEE Backend
 
-The FastAPI backend for SOWTEE - providing the agentic orchestrator, vision analysis, and memory services.
+The FastAPI backend for SOWTEE - providing the agentic orchestrator, vision analysis, memory services, and surrounding voice transcription.
 
 ## Quick Start
 
@@ -10,7 +10,7 @@ uv sync
 
 # Configure environment
 cp .env.example .env
-# Edit .env and add your GEMINI_API_KEY
+# Edit .env and add your GROQ_API_KEY
 
 # Run the server
 uv run uvicorn src.main:app --reload --port 8000

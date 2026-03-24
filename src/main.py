@@ -4,10 +4,11 @@ Main application entry point with API routes.
 """
 
 from contextlib import asynccontextmanager
+import re
 from typing import AsyncGenerator
 
 import structlog
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -289,6 +290,221 @@ async def format_text(request: FormatTextRequest) -> FormatTextResponse:
     return FormatTextResponse(
         formatted_text=formatted,
         was_modified=formatted != request.text,
+    )
+
+
+class SurroundingTranscriptionResponse(BaseModel):
+    """Response from surrounding voice transcription."""
+    text: str
+    language: str | None = None
+    duration: float | None = None
+    model: str | None = None
+    has_speech: bool = False
+    avg_no_speech_prob: float | None = None
+    avg_logprob: float | None = None
+    speech_confidence: float | None = None
+
+
+def _compute_transcription_quality(
+    text: str,
+    avg_no_speech_prob: float | None,
+    avg_logprob: float | None,
+    speech_confidence: float | None,
+    segments: list[dict] | list,
+) -> tuple[bool, str]:
+    """Return whether transcription should be accepted and a reason tag."""
+    normalized_text = re.sub(r"\s+", " ", text).strip().lower()
+    alnum_letters = re.sub(r"[^a-z0-9\u0600-\u06ff]", "", normalized_text)
+    tokens = [token for token in normalized_text.split(" ") if token]
+    token_count = len(tokens)
+
+    is_too_short = len(alnum_letters) < 3
+    has_no_letters = not bool(re.search(r"[a-z\u0600-\u06ff]", normalized_text))
+    is_repeated_noise = bool(re.fullmatch(r"([a-z\u0600-\u06ff])\1{2,}", normalized_text))
+
+    is_low_confidence = (
+        (avg_no_speech_prob is not None and avg_no_speech_prob > 0.35)
+        or (avg_logprob is not None and avg_logprob < -1.0)
+        or (speech_confidence is not None and speech_confidence < 0.62)
+    )
+    is_low_quality_text = (
+        is_too_short
+        or has_no_letters
+        or is_repeated_noise
+        or (token_count <= 1 and len(alnum_letters) <= 3)
+    )
+
+    is_short_and_uncertain = (
+        token_count <= 2
+        and (
+            (speech_confidence is not None and speech_confidence < 0.72)
+            or (avg_no_speech_prob is not None and avg_no_speech_prob > 0.25)
+        )
+    )
+
+    speech_like_segments = 0
+    total_segments = 0
+    if isinstance(segments, list):
+        for segment in segments:
+            if not isinstance(segment, dict):
+                continue
+            total_segments += 1
+            seg_no_speech = segment.get("no_speech_prob")
+            seg_avg_logprob = segment.get("avg_logprob")
+
+            seg_is_speech_like = True
+            if isinstance(seg_no_speech, (int, float)) and float(seg_no_speech) > 0.45:
+                seg_is_speech_like = False
+            if isinstance(seg_avg_logprob, (int, float)) and float(seg_avg_logprob) < -1.2:
+                seg_is_speech_like = False
+
+            if seg_is_speech_like:
+                speech_like_segments += 1
+
+    segment_support_ratio = (
+        (speech_like_segments / total_segments)
+        if total_segments > 0
+        else None
+    )
+    weak_segment_support = (
+        segment_support_ratio is not None
+        and segment_support_ratio < 0.34
+    )
+
+    if is_low_confidence:
+        return (False, "low_confidence")
+    if is_low_quality_text:
+        return (False, "low_quality_text")
+    if is_short_and_uncertain:
+        return (False, "short_uncertain")
+    if weak_segment_support:
+        return (False, "weak_segment_support")
+
+    return (True, "accepted")
+
+
+@app.post(
+    "/api/v1/transcribe/surrounding",
+    response_model=SurroundingTranscriptionResponse,
+    tags=["Skills"],
+    summary="Transcribe surrounding speech using Groq Whisper",
+)
+async def transcribe_surrounding_speech(
+    audio: UploadFile = File(...),
+    language: str | None = Form(default=None),
+) -> SurroundingTranscriptionResponse:
+    """Transcribe a surrounding speech segment audio file."""
+    from .services.model_manager import get_model_manager
+
+    if not audio.content_type or not audio.content_type.startswith("audio/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Audio file is required",
+        )
+
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Audio payload is empty",
+        )
+
+    if len(audio_bytes) > 15 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Audio file too large (max 15MB)",
+        )
+
+    manager = get_model_manager()
+    try:
+        result = await manager.transcribe_audio(
+            audio_bytes,
+            filename=audio.filename or "surrounding.webm",
+            content_type=audio.content_type,
+            language=language,
+        )
+    except Exception as exc:
+        message = str(exc).lower()
+        if "could not process file" in message or "valid media file" in message:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid audio format for transcription",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Transcription provider request failed",
+        ) from exc
+
+    text = (result.get("text") or "").strip()
+    segments = result.get("segments") or []
+
+    no_speech_values: list[float] = []
+    logprob_values: list[float] = []
+
+    if isinstance(segments, list):
+        for segment in segments:
+            if not isinstance(segment, dict):
+                continue
+
+            no_speech_prob = segment.get("no_speech_prob")
+            if isinstance(no_speech_prob, (int, float)):
+                no_speech_values.append(float(no_speech_prob))
+
+            avg_logprob = segment.get("avg_logprob")
+            if isinstance(avg_logprob, (int, float)):
+                logprob_values.append(float(avg_logprob))
+
+    avg_no_speech_prob = (
+        sum(no_speech_values) / len(no_speech_values)
+        if no_speech_values
+        else None
+    )
+    avg_logprob = (
+        sum(logprob_values) / len(logprob_values)
+        if logprob_values
+        else None
+    )
+
+    speech_confidence: float | None = None
+    if avg_no_speech_prob is not None:
+        speech_confidence = max(0.0, min(1.0, 1.0 - avg_no_speech_prob))
+        if avg_logprob is not None:
+            logprob_signal = max(0.0, min(1.0, (avg_logprob + 1.5) / 2.5))
+            speech_confidence = max(0.0, min(1.0, (speech_confidence * 0.7) + (logprob_signal * 0.3)))
+
+    should_accept, filter_reason = _compute_transcription_quality(
+        text,
+        avg_no_speech_prob,
+        avg_logprob,
+        speech_confidence,
+        segments,
+    )
+    if not should_accept:
+        text = ""
+
+    logger.info(
+        "whisper_transcription_result",
+        raw_text_len=len((result.get("text") or "").strip()),
+        accepted_text_len=len(text),
+        filtered_out=(text == "" and bool((result.get("text") or "").strip())),
+        filter_reason=filter_reason,
+        model=result.get("model"),
+        language=result.get("language"),
+        duration=result.get("duration"),
+        avg_no_speech_prob=avg_no_speech_prob,
+        avg_logprob=avg_logprob,
+        speech_confidence=speech_confidence,
+    )
+
+    return SurroundingTranscriptionResponse(
+        text=text,
+        language=result.get("language"),
+        duration=result.get("duration"),
+        model=result.get("model"),
+        has_speech=bool(text),
+        avg_no_speech_prob=avg_no_speech_prob,
+        avg_logprob=avg_logprob,
+        speech_confidence=speech_confidence,
     )
 
 
