@@ -6,7 +6,7 @@ Centralized settings management with environment variable support.
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -73,6 +73,24 @@ class Settings(BaseSettings):
     # User Session
     session_timeout_minutes: int = 60
     max_history_items: int = 100
+
+    @field_validator(
+        "gemini_api_key",
+        "groq_api_key",
+        "lingodotdev_api_key",
+        "upliftai_api_key",
+        "elevenlabs_api_key",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_api_key(cls, value: str | None) -> str:
+        """Normalize API key values loaded from env vars."""
+        if value is None:
+            return ""
+        normalized = str(value).strip()
+        if len(normalized) >= 2 and normalized[0] == normalized[-1] and normalized[0] in {'"', "'"}:
+            normalized = normalized[1:-1].strip()
+        return normalized
 
 
 @lru_cache

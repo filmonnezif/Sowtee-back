@@ -81,7 +81,8 @@ This backend is ready for Railway deployment with:
 2. In Railway, create a new project from that repo.
 3. Set the service root directory to `backend` (if using the monorepo).
 4. Add required environment variables in Railway:
-    - `GEMINI_API_KEY` (required)
+    - `GROQ_API_KEY` (required)
+    - `GEMINI_API_KEY` (required for vision fallback/features)
     - Optional overrides: `GEMINI_MODEL`, `TOP_K_PHRASES`, `MEMORY_RETRIEVAL_LIMIT`, `CHROMA_PERSIST_DIRECTORY`
 5. Deploy.
 
