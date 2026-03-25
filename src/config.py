@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     session_timeout_minutes: int = 60
     max_history_items: int = 100
 
+    # Startup diagnostics
+    startup_key_check_strict: bool = False
+
     @field_validator(
         "gemini_api_key",
         "groq_api_key",

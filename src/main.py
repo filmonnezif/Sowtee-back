@@ -21,6 +21,7 @@ from .models import (
     WordSuggestionResponse,
 )
 from .services.orchestrator import get_orchestrator
+from .services.startup_checks import run_startup_key_checks
 
 # Configure structured logging
 structlog.configure(
@@ -53,6 +54,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         version=settings.app_version,
         debug=settings.debug,
     )
+
+    startup_keys_ok = await run_startup_key_checks(settings)
+    if not startup_keys_ok:
+        logger.error(
+            "Startup key checks failed for required providers",
+            strict_mode=settings.startup_key_check_strict,
+        )
+        if settings.startup_key_check_strict:
+            raise RuntimeError("Startup key checks failed for required providers")
     
     # Initialize services
     _ = get_orchestrator()
