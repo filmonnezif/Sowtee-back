@@ -4,6 +4,7 @@ Main application entry point with API routes.
 """
 
 from contextlib import asynccontextmanager
+import os
 from typing import AsyncGenerator, Literal
 
 import structlog
@@ -55,13 +56,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         debug=settings.debug,
     )
 
-    startup_keys_ok = await run_startup_key_checks(settings)
+    strict_mode = settings.startup_key_check_strict or bool(os.getenv("RAILWAY_ENVIRONMENT"))
+    startup_keys_ok = await run_startup_key_checks(
+        settings,
+        fail_on_any_invalid_configured=strict_mode,
+    )
     if not startup_keys_ok:
         logger.error(
             "Startup key checks failed for required providers",
-            strict_mode=settings.startup_key_check_strict,
+            strict_mode=strict_mode,
         )
-        if settings.startup_key_check_strict:
+        if strict_mode:
             raise RuntimeError("Startup key checks failed for required providers")
     
     # Initialize services

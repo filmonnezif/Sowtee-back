@@ -83,11 +83,11 @@ This backend is ready for Railway deployment with:
 4. Add required environment variables in Railway:
     - `GROQ_API_KEY` (required)
     - `GEMINI_API_KEY` (required for vision fallback/features)
-    - Optional: `STARTUP_KEY_CHECK_STRICT=true` to fail fast on invalid required keys
+    - Optional: `STARTUP_KEY_CHECK_STRICT=true` to force strict mode everywhere
     - Optional overrides: `GEMINI_MODEL`, `TOP_K_PHRASES`, `MEMORY_RETRIEVAL_LIMIT`, `CHROMA_PERSIST_DIRECTORY`
 5. Deploy.
 
-At startup, the backend now validates API keys and logs provider-level diagnostics with masked fingerprints (never full keys). This helps identify which provider key is invalid in production logs.
+At startup, the backend validates API keys and logs provider-level diagnostics with masked fingerprints (never full keys). On Railway, strict mode is enabled automatically: if any configured API key is invalid, app startup fails immediately.
 
 Railway will run:
 - Build: detected automatically by Nixpacks

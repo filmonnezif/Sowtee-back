@@ -73,7 +73,7 @@ def _format_check_results(results: list[KeyCheckResult]) -> None:
         )
 
 
-async def run_startup_key_checks(settings: Settings) -> bool:
+async def run_startup_key_checks(settings: Settings, fail_on_any_invalid_configured: bool = False) -> bool:
     """Validate API keys at startup and emit safe diagnostic logs."""
     checks: list[KeyCheckResult] = []
 
@@ -143,6 +143,10 @@ async def run_startup_key_checks(settings: Settings) -> bool:
     )
 
     _format_check_results(checks)
+
+    if fail_on_any_invalid_configured:
+        configured_failures = [check for check in checks if check.configured and not check.valid]
+        return not configured_failures
 
     required_failures = [check for check in checks if check.required and (not check.configured or not check.valid)]
     return not required_failures
