@@ -32,6 +32,8 @@ DEFAULT_PROFILE: dict[str, Any] = {
     "common_needs": [],       # ["water", "medication", "bathroom", "pain relief"]
     "caregiver_name": "",
     "notes": "",              # Anything else the agent should know
+    "cloned_voice_id": None,
+    "cloned_voice_name": "",
     "created_at": "",
     "updated_at": "",
 }

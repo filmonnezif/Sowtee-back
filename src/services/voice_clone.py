@@ -18,8 +18,37 @@ def get_cloned_voice_id() -> str | None:
     return _cloned_voice_id
 
 
-def get_clone_status() -> dict:
-    """Return current clone status."""
+async def get_user_cloned_voice_id(user_id: str | None) -> str | None:
+    """Return a user's cloned voice ID from profile storage, with global fallback."""
+    if not user_id:
+        return _cloned_voice_id
+
+    from .user_profile import get_profile_service
+
+    profile_service = get_profile_service()
+    profile = await profile_service.get_profile(user_id)
+    voice_id = profile.get("cloned_voice_id")
+    if isinstance(voice_id, str) and voice_id.strip():
+        return voice_id
+
+    return _cloned_voice_id
+
+
+async def get_clone_status(user_id: str | None = None) -> dict:
+    """Return clone status, preferring user profile data when user_id is provided."""
+    if user_id:
+        from .user_profile import get_profile_service
+
+        profile_service = get_profile_service()
+        profile = await profile_service.get_profile(user_id)
+        user_voice_id = profile.get("cloned_voice_id")
+        user_voice_name = profile.get("cloned_voice_name")
+        return {
+            "is_cloned": bool(user_voice_id),
+            "voice_id": user_voice_id,
+            "voice_name": user_voice_name,
+        }
+
     return {
         "is_cloned": _cloned_voice_id is not None,
         "voice_id": _cloned_voice_id,
@@ -27,8 +56,21 @@ def get_clone_status() -> dict:
     }
 
 
-def clear_cloned_voice() -> dict:
-    """Reset to default voice."""
+async def clear_cloned_voice(user_id: str | None = None) -> dict:
+    """Reset cloned voice for a specific user, or clear global fallback voice."""
+    if user_id:
+        from .user_profile import get_profile_service
+
+        profile_service = get_profile_service()
+        profile = await profile_service.get_profile(user_id)
+        old_id = profile.get("cloned_voice_id")
+        await profile_service.save_profile(user_id, {
+            "cloned_voice_id": None,
+            "cloned_voice_name": "",
+        })
+        logger.info("voice_clone_cleared_for_user", user_id=user_id, old_voice_id=old_id)
+        return {"status": "cleared", "old_voice_id": old_id}
+
     global _cloned_voice_id, _cloned_voice_name
     old_id = _cloned_voice_id
     _cloned_voice_id = None
@@ -37,7 +79,12 @@ def clear_cloned_voice() -> dict:
     return {"status": "cleared", "old_voice_id": old_id}
 
 
-async def clone_voice(audio_bytes: bytes, filename: str, voice_name: str = "My Voice") -> dict:
+async def clone_voice(
+    audio_bytes: bytes,
+    filename: str,
+    voice_name: str = "My Voice",
+    user_id: str | None = None,
+) -> dict:
     """
     Clone a voice from an audio file using ElevenLabs IVC.
 
@@ -86,11 +133,23 @@ async def clone_voice(audio_bytes: bytes, filename: str, voice_name: str = "My V
             voice_name=voice_name,
         )
 
-        return {
+        result_payload = {
             "status": "success",
             "voice_id": _cloned_voice_id,
             "voice_name": voice_name,
         }
+
+        if user_id:
+            from .user_profile import get_profile_service
+
+            profile_service = get_profile_service()
+            await profile_service.save_profile(user_id, {
+                "cloned_voice_id": _cloned_voice_id,
+                "cloned_voice_name": voice_name,
+            })
+            result_payload["user_id"] = user_id
+
+        return result_payload
 
     except Exception as e:
         logger.error(

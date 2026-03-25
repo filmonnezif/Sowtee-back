@@ -270,11 +270,6 @@ class ModelManager:
         settings = get_settings()
         model_id = settings.groq_whisper_model
         client = self._get_client()
-        transcription_prompt = prompt or (
-            "Transcribe only clear spoken human language. "
-            "If the audio is mostly silence, claps, taps, background noise, breaths, or non-speech sounds, return an empty transcription."
-        )
-
         if model_id not in self._usage:
             self._usage[model_id] = ModelUsage()
         self._usage[model_id].requests += 1
@@ -284,7 +279,6 @@ class ModelManager:
                 model=model_id,
                 file=(filename, audio_bytes, content_type),
                 language=language,
-                prompt=transcription_prompt,
                 response_format="verbose_json",
                 temperature=0,
             )

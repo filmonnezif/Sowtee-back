@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     groq_api_key: str = Field(default="", description="Groq API Key")
     groq_model: str = "llama-3.3-70b-versatile"
     groq_fallback_model: str = "llama-3.1-8b-instant"
-    groq_whisper_model: str = "whisper-large-v3"
+    groq_whisper_model: str = "whisper-large-v3-turbo"
     
     # Lingo.dev Translation API (for EN→AR/UR translation)
     lingodotdev_api_key: str = Field(default="", description="Lingo.dev API Key for translation")
@@ -52,7 +52,9 @@ class Settings(BaseSettings):
     
     # ElevenLabs TTS API
     elevenlabs_api_key: str = Field(default="", description="ElevenLabs API Key for TTS")
-    elevenlabs_voice_id: str = Field(default="JBFqnCBsd6RMkjVDRZzb", description="ElevenLabs voice ID")
+    elevenlabs_voice_id: str = Field(default="JBFqnCBsd6RMkjVDRZzb", description="Legacy default ElevenLabs voice ID")
+    elevenlabs_voice_male_id: str = Field(default="JBFqnCBsd6RMkjVDRZzb", description="ElevenLabs male voice ID")
+    elevenlabs_voice_female_id: str = Field(default="21m00Tcm4TlvDq8ikWAM", description="ElevenLabs female voice ID")
     elevenlabs_model_id: str = Field(default="eleven_flash_v2_5", description="ElevenLabs model ID")
     
     # Rate limiting (to avoid quota exhaustion)

@@ -4,11 +4,10 @@ Main application entry point with API routes.
 """
 
 from contextlib import asynccontextmanager
-import re
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Literal
 
 import structlog
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -305,84 +304,6 @@ class SurroundingTranscriptionResponse(BaseModel):
     speech_confidence: float | None = None
 
 
-def _compute_transcription_quality(
-    text: str,
-    avg_no_speech_prob: float | None,
-    avg_logprob: float | None,
-    speech_confidence: float | None,
-    segments: list[dict] | list,
-) -> tuple[bool, str]:
-    """Return whether transcription should be accepted and a reason tag."""
-    normalized_text = re.sub(r"\s+", " ", text).strip().lower()
-    alnum_letters = re.sub(r"[^a-z0-9\u0600-\u06ff]", "", normalized_text)
-    tokens = [token for token in normalized_text.split(" ") if token]
-    token_count = len(tokens)
-
-    is_too_short = len(alnum_letters) < 3
-    has_no_letters = not bool(re.search(r"[a-z\u0600-\u06ff]", normalized_text))
-    is_repeated_noise = bool(re.fullmatch(r"([a-z\u0600-\u06ff])\1{2,}", normalized_text))
-
-    is_low_confidence = (
-        (avg_no_speech_prob is not None and avg_no_speech_prob > 0.35)
-        or (avg_logprob is not None and avg_logprob < -1.0)
-        or (speech_confidence is not None and speech_confidence < 0.62)
-    )
-    is_low_quality_text = (
-        is_too_short
-        or has_no_letters
-        or is_repeated_noise
-        or (token_count <= 1 and len(alnum_letters) <= 3)
-    )
-
-    is_short_and_uncertain = (
-        token_count <= 2
-        and (
-            (speech_confidence is not None and speech_confidence < 0.72)
-            or (avg_no_speech_prob is not None and avg_no_speech_prob > 0.25)
-        )
-    )
-
-    speech_like_segments = 0
-    total_segments = 0
-    if isinstance(segments, list):
-        for segment in segments:
-            if not isinstance(segment, dict):
-                continue
-            total_segments += 1
-            seg_no_speech = segment.get("no_speech_prob")
-            seg_avg_logprob = segment.get("avg_logprob")
-
-            seg_is_speech_like = True
-            if isinstance(seg_no_speech, (int, float)) and float(seg_no_speech) > 0.45:
-                seg_is_speech_like = False
-            if isinstance(seg_avg_logprob, (int, float)) and float(seg_avg_logprob) < -1.2:
-                seg_is_speech_like = False
-
-            if seg_is_speech_like:
-                speech_like_segments += 1
-
-    segment_support_ratio = (
-        (speech_like_segments / total_segments)
-        if total_segments > 0
-        else None
-    )
-    weak_segment_support = (
-        segment_support_ratio is not None
-        and segment_support_ratio < 0.34
-    )
-
-    if is_low_confidence:
-        return (False, "low_confidence")
-    if is_low_quality_text:
-        return (False, "low_quality_text")
-    if is_short_and_uncertain:
-        return (False, "short_uncertain")
-    if weak_segment_support:
-        return (False, "weak_segment_support")
-
-    return (True, "accepted")
-
-
 @app.post(
     "/api/v1/transcribe/surrounding",
     response_model=SurroundingTranscriptionResponse,
@@ -472,22 +393,12 @@ async def transcribe_surrounding_speech(
             logprob_signal = max(0.0, min(1.0, (avg_logprob + 1.5) / 2.5))
             speech_confidence = max(0.0, min(1.0, (speech_confidence * 0.7) + (logprob_signal * 0.3)))
 
-    should_accept, filter_reason = _compute_transcription_quality(
-        text,
-        avg_no_speech_prob,
-        avg_logprob,
-        speech_confidence,
-        segments,
-    )
-    if not should_accept:
-        text = ""
-
     logger.info(
         "whisper_transcription_result",
         raw_text_len=len((result.get("text") or "").strip()),
         accepted_text_len=len(text),
-        filtered_out=(text == "" and bool((result.get("text") or "").strip())),
-        filter_reason=filter_reason,
+        filtered_out=False,
+        filter_reason="frontend_vad_guarded",
         model=result.get("model"),
         language=result.get("language"),
         duration=result.get("duration"),
@@ -580,6 +491,8 @@ class UserProfileRequest(BaseModel):
     common_needs: list[str] = []
     caregiver_name: str = ""
     notes: str = ""
+    cloned_voice_id: str | None = None
+    cloned_voice_name: str = ""
 
 
 @app.get(
@@ -928,6 +841,8 @@ async def expansion_feedback(request: ExpansionFeedbackRequest) -> dict[str, str
 class TTSRequest(BaseModel):
     text: str
     language: str = "en"
+    user_id: str | None = None
+    voice_option: Literal["cloned", "male", "female"] = "male"
     emotion: str | None = None
     scene_description: str | None = None
     conversation_context: str | None = None
@@ -993,6 +908,8 @@ async def tts_stream(request: TTSRequest):
         generate_elevenlabs_speech(
             text=speak_text,
             language=request.language,
+            user_id=request.user_id,
+            voice_option=request.voice_option,
             stability=voice_settings["stability"],
             similarity_boost=voice_settings["similarity_boost"],
             style=voice_settings["style"],
@@ -1010,7 +927,11 @@ async def tts_stream(request: TTSRequest):
     summary="Clone a voice from an audio sample",
     description="Upload a short audio file (10-30s) to create a cloned voice via ElevenLabs IVC.",
 )
-async def clone_voice_endpoint(file: UploadFile = File(...)):
+async def clone_voice_endpoint(
+    file: UploadFile = File(...),
+    user_id: str = Form(...),
+    voice_name: str = Form("My Voice"),
+):
     """Clone a voice from an uploaded audio sample."""
     from .services.voice_clone import clone_voice
 
@@ -1029,7 +950,8 @@ async def clone_voice_endpoint(file: UploadFile = File(...)):
         result = await clone_voice(
             audio_bytes=audio_bytes,
             filename=file.filename or "audio.mp3",
-            voice_name="My Voice",
+            voice_name=voice_name,
+            user_id=user_id,
         )
         return result
     except Exception as e:
@@ -1041,10 +963,10 @@ async def clone_voice_endpoint(file: UploadFile = File(...)):
     tags=["Skills"],
     summary="Get voice clone status",
 )
-async def get_voice_clone_status():
+async def get_voice_clone_status(user_id: str = Query(...)):
     """Check if a cloned voice is active."""
     from .services.voice_clone import get_clone_status
-    return get_clone_status()
+    return await get_clone_status(user_id=user_id)
 
 
 @app.delete(
@@ -1052,10 +974,10 @@ async def get_voice_clone_status():
     tags=["Skills"],
     summary="Remove cloned voice",
 )
-async def remove_cloned_voice():
+async def remove_cloned_voice(user_id: str = Query(...)):
     """Remove the cloned voice and revert to the default voice."""
     from .services.voice_clone import clear_cloned_voice
-    return clear_cloned_voice()
+    return await clear_cloned_voice(user_id=user_id)
 
 
 class ModelStatusResponse(BaseModel):
