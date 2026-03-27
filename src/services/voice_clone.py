@@ -4,6 +4,9 @@ Allows users to upload a short audio sample to clone their voice.
 """
 
 import structlog
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+
 from src.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -11,6 +14,16 @@ logger = structlog.get_logger(__name__)
 # Module-level storage for cloned voice ID
 _cloned_voice_id: str | None = None
 _cloned_voice_name: str | None = None
+
+
+def _extract_voice_id(result: object) -> str | None:
+    """Extract voice_id across SDK response shapes."""
+    if isinstance(result, dict):
+        voice_id = result.get("voice_id")
+        return voice_id if isinstance(voice_id, str) else None
+
+    voice_id = getattr(result, "voice_id", None)
+    return voice_id if isinstance(voice_id, str) else None
 
 
 def get_cloned_voice_id() -> str | None:
@@ -116,15 +129,49 @@ async def clone_voice(
 
         client = AsyncElevenLabs(api_key=api_key)
 
-        # Create voice clone via IVC (Instant Voice Cloning)
-        # Note: In elevenlabs>=1.0.0, use client.voices.add()
-        result = await client.voices.add(
-            name=voice_name,
-            files=[audio_bytes],
-            description=f"Cloned voice from {filename}",
-        )
+        description = f"Cloned voice from {filename}"
 
-        _cloned_voice_id = result.voice_id
+        add_method = getattr(client.voices, "add", None)
+        if callable(add_method):
+            result = await add_method(
+                name=voice_name,
+                files=[audio_bytes],
+                description=description,
+            )
+        else:
+            clone_method = getattr(client, "clone", None)
+            if not callable(clone_method):
+                available_methods = [m for m in dir(client.voices) if not m.startswith("_")]
+                raise RuntimeError(
+                    "Unsupported ElevenLabs SDK: no compatible voice clone method "
+                    f"found (available voices methods: {available_methods})"
+                )
+
+            suffix = Path(filename).suffix or ".mp3"
+            with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(audio_bytes)
+                tmp_path = tmp.name
+
+            try:
+                try:
+                    result = await clone_method(
+                        name=voice_name,
+                        files=[tmp_path],
+                        description=description,
+                        labels="{}",
+                    )
+                except TypeError:
+                    result = await clone_method(
+                        name=voice_name,
+                        files=[tmp_path],
+                        description=description,
+                    )
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)
+
+        _cloned_voice_id = _extract_voice_id(result)
+        if not _cloned_voice_id:
+            raise RuntimeError("Voice cloning succeeded but no voice_id was returned by ElevenLabs")
         _cloned_voice_name = voice_name
 
         logger.info(

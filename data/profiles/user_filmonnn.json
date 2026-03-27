@@ -1,0 +1,20 @@
+{
+  "display_name": "",
+  "age": null,
+  "condition": "",
+  "condition_stage": "",
+  "primary_language": "en",
+  "secondary_language": "",
+  "location": "",
+  "living_situation": "",
+  "interests": [],
+  "daily_routine": "",
+  "communication_style": "casual",
+  "common_needs": [],
+  "caregiver_name": "",
+  "notes": "",
+  "cloned_voice_id": "Cb65QHLkM9RSZbg9C7qc",
+  "cloned_voice_name": "My Voice",
+  "created_at": "2026-03-27T18:46:18.264509",
+  "updated_at": "2026-03-27T18:46:18.264509"
+}
