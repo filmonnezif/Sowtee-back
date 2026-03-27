@@ -26,6 +26,24 @@ def _extract_voice_id(result: object) -> str | None:
     return voice_id if isinstance(voice_id, str) else None
 
 
+async def _call_first_working_clone_method(method: object, attempts: list[dict]) -> object:
+    """Try multiple call signatures for SDK compatibility and return first success."""
+    if not callable(method):
+        raise TypeError("Clone method is not callable")
+
+    last_error: Exception | None = None
+    for kwargs in attempts:
+        try:
+            return await method(**kwargs)
+        except TypeError as e:
+            last_error = e
+            continue
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("No clone method call attempts were provided")
+
+
 def get_cloned_voice_id() -> str | None:
     """Return the active cloned voice ID, or None if not set."""
     return _cloned_voice_id
@@ -131,43 +149,68 @@ async def clone_voice(
 
         description = f"Cloned voice from {filename}"
 
-        add_method = getattr(client.voices, "add", None)
-        if callable(add_method):
-            result = await add_method(
-                name=voice_name,
-                files=[audio_bytes],
-                description=description,
-            )
-        else:
-            clone_method = getattr(client, "clone", None)
-            if not callable(clone_method):
+        suffix = Path(filename).suffix or ".mp3"
+        with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+
+        try:
+            ivc_client = getattr(client.voices, "ivc", None)
+            if ivc_client is not None:
+                ivc_method = getattr(ivc_client, "create", None) or getattr(ivc_client, "add", None)
+                if callable(ivc_method):
+                    with open(tmp_path, "rb") as f:
+                        result = await _call_first_working_clone_method(
+                            ivc_method,
+                            attempts=[
+                                {"name": voice_name, "files": [f], "description": description},
+                                {"name": voice_name, "files": [tmp_path], "description": description},
+                                {"name": voice_name, "files": [audio_bytes], "description": description},
+                                {"voice_name": voice_name, "files": [f], "description": description},
+                                {"voice_name": voice_name, "files": [tmp_path], "description": description},
+                            ],
+                        )
+                else:
+                    result = None
+            else:
+                result = None
+
+            if result is None:
+                add_method = getattr(client.voices, "add", None)
+                if callable(add_method):
+                    with open(tmp_path, "rb") as f:
+                        result = await _call_first_working_clone_method(
+                            add_method,
+                            attempts=[
+                                {"name": voice_name, "files": [audio_bytes], "description": description},
+                                {"name": voice_name, "files": [f], "description": description},
+                                {"name": voice_name, "files": [tmp_path], "description": description},
+                            ],
+                        )
+
+            if result is None:
+                clone_method = getattr(client, "clone", None)
+                if callable(clone_method):
+                    result = await _call_first_working_clone_method(
+                        clone_method,
+                        attempts=[
+                            {"name": voice_name, "files": [tmp_path], "description": description, "labels": "{}"},
+                            {"name": voice_name, "files": [tmp_path], "description": description},
+                            {"voice_name": voice_name, "files": [tmp_path], "description": description},
+                        ],
+                    )
+
+            if result is None:
                 available_methods = [m for m in dir(client.voices) if not m.startswith("_")]
+                ivc_methods: list[str] = []
+                if ivc_client is not None:
+                    ivc_methods = [m for m in dir(ivc_client) if not m.startswith("_")]
                 raise RuntimeError(
-                    "Unsupported ElevenLabs SDK: no compatible voice clone method "
-                    f"found (available voices methods: {available_methods})"
+                    "Unsupported ElevenLabs SDK: no compatible voice clone method found "
+                    f"(available voices methods: {available_methods}; ivc methods: {ivc_methods})"
                 )
-
-            suffix = Path(filename).suffix or ".mp3"
-            with NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp.write(audio_bytes)
-                tmp_path = tmp.name
-
-            try:
-                try:
-                    result = await clone_method(
-                        name=voice_name,
-                        files=[tmp_path],
-                        description=description,
-                        labels="{}",
-                    )
-                except TypeError:
-                    result = await clone_method(
-                        name=voice_name,
-                        files=[tmp_path],
-                        description=description,
-                    )
-            finally:
-                Path(tmp_path).unlink(missing_ok=True)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
 
         _cloned_voice_id = _extract_voice_id(result)
         if not _cloned_voice_id:
